@@ -2,6 +2,8 @@
 
 An offline-first notes application built with React Native and Expo, designed for environments with unreliable or no internet connectivity.
 
+[Watch Demo Video](https://drive.google.com/file/d/1fIaMLBTXBVL_IFFcL3fHeDgPBIvh8hGq/view?usp=sharing)
+
 ## Features
 
 - **Offline-First Architecture** - All data stored locally in SQLite, works without internet
