@@ -1,7 +1,6 @@
 import { AppState, type AppStateStatus } from "react-native";
-import NetInfo from "@react-native-community/netinfo";
 
-import { isOnline } from "./network-monitor";
+import { isOnline, setOnConnectivityRestored } from "./network-monitor";
 import { handleConflict, isConflictError } from "./conflict-resolver";
 
 // services
@@ -25,26 +24,25 @@ class SyncManager {
 	private setupListeners() {
 		// listen for app state changes (foreground/background)
 		AppState.addEventListener("change", this.handleAppStateChange);
-
-		// listen for network state changes
-		NetInfo.addEventListener(this.handleNetworkChange);
 	}
 
-	// call this after database migrations complete
+	// call this after database migrations and network monitor initialization
 	public setDatabaseReady() {
 		this.databaseReady = true;
+		console.log("[sync] database ready, online:", isOnline());
+
+		// register callback for when connectivity is restored
+		setOnConnectivityRestored(() => {
+			if (this.databaseReady) {
+				console.log("[sync] connectivity restored - syncing pending changes");
+				this.retryFailedSyncs();
+			}
+		});
 	}
 
 	private handleAppStateChange = (nextAppState: AppStateStatus) => {
 		if (nextAppState === "active" && this.databaseReady) {
 			// app came to foreground - retry failed syncs (which resets to pending, then syncs all)
-			this.retryFailedSyncs();
-		}
-	};
-
-	private handleNetworkChange = (state: any) => {
-		if (state.isConnected && !this.isSyncing && this.databaseReady) {
-			// network restored - retry failed syncs
 			this.retryFailedSyncs();
 		}
 	};

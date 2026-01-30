@@ -1,6 +1,7 @@
 import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
 
 let isConnected = true;
+let onConnectivityRestored: (() => void) | null = null;
 
 // determine if device has internet connectivity
 const getIsOnline = (state: NetInfoState): boolean => {
@@ -39,6 +40,12 @@ export const initializeNetworkMonitor = async () => {
 				isInternetReachable: state.isInternetReachable,
 				resolved: isConnected,
 			});
+
+			// notify when transitioning from offline to online
+			if (!wasConnected && isConnected && onConnectivityRestored) {
+				console.log("[network] connectivity restored - triggering callback");
+				onConnectivityRestored();
+			}
 		}
 	});
 };
@@ -46,6 +53,11 @@ export const initializeNetworkMonitor = async () => {
 // check if device is online
 export const isOnline = (): boolean => {
 	return isConnected;
+};
+
+// register callback for when connectivity is restored
+export const setOnConnectivityRestored = (callback: () => void) => {
+	onConnectivityRestored = callback;
 };
 
 // wait for network connection

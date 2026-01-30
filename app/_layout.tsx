@@ -66,12 +66,13 @@ export default function RootLayout() {
 				await runMigrations();
 				console.log("[app] database migrations completed");
 
-				// mark database as ready for sync operations
-				syncManager.setDatabaseReady();
-
-				// initialize network monitoring
+				// initialize network monitoring first (before setDatabaseReady)
 				await initializeNetworkMonitor();
 				console.log("[app] network monitoring initialized");
+
+				// mark database as ready for sync operations
+				// this must come after network monitor so isOnline() returns correct value
+				syncManager.setDatabaseReady();
 
 				// check if database is empty and attempt initial sync
 				const notes = await db.getAllNotes();
