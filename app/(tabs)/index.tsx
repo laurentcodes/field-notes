@@ -185,6 +185,7 @@ export default function NotesListScreen() {
 						keyboardDismissMode="on-drag"
 						keyboardShouldPersistTaps="handled"
 						maintainVisibleContentPosition={{ disabled: true }}
+						showsVerticalScrollIndicator={false}
 					/>
 
 					<FAB
