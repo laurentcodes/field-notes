@@ -1,0 +1,142 @@
+@import "tailwindcss";
+@import "uniwind";
+@import "heroui-native/styles";
+
+@source "./node_modules/heroui-native/lib";
+
+@layer theme {
+  @variant light {
+    /* base colors */
+    --background: oklch(0.973 0.0133 286.15);
+    --foreground: oklch(0.3015 0.0572 282.42);
+
+    /* surface: cards, accordions, disclosure groups */
+    --surface: oklch(1 0 0);
+    --surface-foreground: oklch(0.3015 0.0572 282.42);
+
+    /* overlay: dialogs, popovers, modals, menus */
+    --overlay: oklch(1 0 0);
+    --overlay-foreground: oklch(0.3015 0.0572 282.42);
+
+    --muted: oklch(0.5426 0.0465 284.74);
+
+    --default: oklch(0.9174 0.0435 292.69);
+    --default-foreground: oklch(0.4143 0.1039 288.17);
+
+    /* accent - primary brand color (violet) */
+    --accent: oklch(0.5417 0.179 288.03);
+    --accent-foreground: oklch(1 0 0);
+
+    /* accent soft - for secondary buttons */
+    --accent-soft: oklch(0.9221 0.0373 288.03);
+    --accent-soft-foreground: oklch(0.5417 0.179 288.03);
+
+    /* secondary */
+    --secondary: oklch(0.9221 0.0373 262.14);
+    --secondary-foreground: oklch(0.3015 0.0572 282.42);
+
+    /* form fields */
+    --field-background: oklch(0.958 0.0133 286.15);
+    --field-foreground: oklch(0.3015 0.0572 282.42);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.9115 0.0216 285.96);
+
+    /* status colors */
+    --success: oklch(0.65 0.18 145);
+    --success-foreground: oklch(0.98 0.005 145);
+
+    --warning: oklch(0.75 0.15 70);
+    --warning-foreground: oklch(0.25 0.05 70);
+
+    --danger: oklch(0.6861 0.2061 14.99);
+    --danger-foreground: oklch(1 0 0);
+
+    /* misc */
+    --border: oklch(0.9115 0.0216 285.96);
+    --divider: oklch(0.92 0.015 286);
+    --link: oklch(0.5417 0.179 288.03);
+    --ring: oklch(0.5417 0.179 288.03);
+
+    /* chart colors */
+    --chart-1: oklch(0.5417 0.179 288.03);
+    --chart-2: oklch(0.7042 0.1602 288.99);
+    --chart-3: oklch(0.5679 0.2113 276.71);
+    --chart-4: oklch(0.6356 0.1922 281.81);
+    --chart-5: oklch(0.4509 0.1758 279.38);
+
+    /* shadows */
+    --surface-shadow:
+      0 4px 10px 0 hsl(240 30% 25% / 0.06), 0 1px 2px -1px
+      hsl(240 30% 25% / 0.12);
+    --overlay-shadow:
+      0 4px 10px 0 hsl(240 30% 25% / 0.12), 0 4px 6px -1px
+      hsl(240 30% 25% / 0.12);
+    --field-shadow:
+      0 1px 2px 0 hsl(240 30% 25% / 0.04), 0 0 1px 0 hsl(240 30% 25% / 0.04);
+  }
+
+  @variant dark {
+    /* base colors */
+    --background: oklch(0.1743 0.0227 283.7998);
+    --foreground: oklch(0.9185 0.0257 285.88);
+
+    /* surface: cards, accordions, disclosure groups */
+    --surface: oklch(0.2284 0.0384 282.93);
+    --surface-foreground: oklch(0.9185 0.0257 285.88);
+
+    /* overlay: dialogs, popovers, modals, menus */
+    --overlay: oklch(0.2284 0.0384 282.93);
+    --overlay-foreground: oklch(0.9185 0.0257 285.88);
+
+    --muted: oklch(0.7166 0.0462 285.17);
+
+    --default: oklch(0.3139 0.0736 283.46);
+    --default-foreground: oklch(0.8367 0.0849 285.91);
+
+    /* accent - primary brand color (violet) */
+    --accent: oklch(0.7162 0.1597 290.4);
+    --accent-foreground: oklch(0.1743 0.0227 283.8);
+
+    /* accent soft - for secondary buttons */
+    --accent-soft: oklch(0.3354 0.0828 290.4);
+    --accent-soft-foreground: oklch(0.7162 0.1597 290.4);
+
+    /* secondary */
+    --secondary: oklch(0.3354 0.0828 280.97);
+    --secondary-foreground: oklch(0.9185 0.0257 285.88);
+
+    /* form fields */
+    --field-background: oklch(0.271 0.0621 281.44);
+    --field-foreground: oklch(0.9185 0.0257 285.88);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.3261 0.0597 282.58);
+
+    /* status colors */
+    --success: oklch(0.7 0.18 145);
+    --success-foreground: oklch(0.15 0.04 145);
+
+    --warning: oklch(0.78 0.15 70);
+    --warning-foreground: oklch(0.2 0.04 70);
+
+    --danger: oklch(0.6861 0.2061 14.99);
+    --danger-foreground: oklch(1 0 0);
+
+    /* misc */
+    --border: oklch(0.3261 0.0597 282.58);
+    --divider: oklch(0.28 0.05 282);
+    --link: oklch(0.7162 0.1597 290.4);
+    --ring: oklch(0.7162 0.1597 290.4);
+
+    /* chart colors */
+    --chart-1: oklch(0.7162 0.1597 290.4);
+    --chart-2: oklch(0.6382 0.1047 274.91);
+    --chart-3: oklch(0.7482 0.1235 244.75);
+    --chart-4: oklch(0.7124 0.0977 186.68);
+    --chart-5: oklch(0.7546 0.1831 346.81);
+
+    /* shadows - subtle in dark mode */
+    --surface-shadow: 0 0 0 0 transparent;
+    --overlay-shadow: 0 0 0 0 transparent;
+    --field-shadow: 0 0 0 0 transparent;
+  }
+}
