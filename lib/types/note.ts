@@ -1,37 +1,13 @@
-export type SyncStatus = 'synced' | 'pending' | 'failed';
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 
-export interface Note {
-  id: string;
-  title: string;
-  body: string;
-  tags: string[];
+export type Note = Doc<"notes">;
+
+export type NoteId = Id<"notes">;
+
+export type SyncStatus = "synced" | "pending";
+
+export interface NoteWithSync extends Note {
   syncStatus: SyncStatus;
-  createdAt: string;
-  updatedAt: string;
-  localUpdatedAt: string;
-  isDeleted: boolean;
-  lastSyncError?: string;
-}
-
-export interface NoteApiResponse {
-  id: string;
-  title: string;
-  body: string;
-  tags: string[];
-  updatedAt: string;
-}
-
-export interface CreateNoteRequest {
-  title: string;
-  body: string;
-  tags: string[];
-}
-
-export interface UpdateNoteRequest {
-  title?: string;
-  body?: string;
-  tags?: string[];
-  updatedAt: string;
 }
 
 export interface NoteFormData {

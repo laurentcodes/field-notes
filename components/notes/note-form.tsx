@@ -20,7 +20,7 @@ import type { NoteFormSchema } from "@/lib/schemas/note";
 
 interface NoteFormProps {
 	initialValues?: NoteFormSchema;
-	onSubmit: (data: NoteFormSchema) => void;
+	onSubmit: (data: NoteFormSchema) => void | Promise<void>;
 	onCancel: () => void;
 	isSubmitting?: boolean;
 }
