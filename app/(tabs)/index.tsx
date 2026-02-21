@@ -1,11 +1,11 @@
 import { FlashList } from "@shopify/flash-list";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Keyboard, Platform, Pressable, View } from "react-native";
+import { useCallback, useMemo, useState } from "react";
+import { Alert, Keyboard, Platform, Pressable, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-// query
-import { useQuery } from "@tanstack/react-query";
+import { useConvex } from "convex/react";
+import { toast } from "sonner-native";
+import { api } from "@/convex/_generated/api";
 
 // components
 import {
@@ -19,10 +19,11 @@ import {
 } from "@/components";
 
 // lib
-import { useSyncState } from "@/hooks/use-sync";
-import * as db from "@/lib/db/queries";
-import { syncManager } from "@/lib/sync/sync-manager";
-import type { Note, NotesFilter } from "@/lib/types/note";
+import { useNotes } from "@/hooks/use-convex-notes";
+import { processPendingMutations } from "@/lib/sync/offline-sync";
+import { isOnline } from "@/lib/sync/network-monitor";
+import { addPendingMutation, deleteCachedNote } from "@/lib/db/queries";
+import type { NoteWithSync, NoteId, NotesFilter } from "@/lib/types/note";
 
 const initialFilterState: NotesFilter = {
 	search: "",
@@ -31,42 +32,23 @@ const initialFilterState: NotesFilter = {
 
 export default function NotesListScreen() {
 	const router = useRouter();
+	const convex = useConvex();
 
 	const [filter, setFilter] = useState<NotesFilter>(initialFilterState);
+	const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
-	const { status: syncStatus } = useSyncState();
+	const { notes: allNotes, isLoading } = useNotes();
 
 	const listBottomPadding = Platform.OS === "android" ? 120 : 100;
 
-	const {
-		data: allNotes,
-		refetch,
-		isLoading,
-	} = useQuery({
-		queryKey: ["notes"],
-		queryFn: db.getAllNotes,
-	});
-
-	const prevSyncStatus = useRef(syncStatus);
-
-	// refetch notes when screen gains focus, dismiss keyboard on blur
+	// dismiss keyboard on blur
 	useFocusEffect(
 		useCallback(() => {
-			refetch();
-
 			return () => {
 				Keyboard.dismiss();
 			};
-		}, [refetch]),
+		}, []),
 	);
-
-	// refetch when sync completes (syncing -> idle)
-	useEffect(() => {
-		if (prevSyncStatus.current === "syncing" && syncStatus === "idle") {
-			refetch();
-		}
-		prevSyncStatus.current = syncStatus;
-	}, [syncStatus, refetch]);
 
 	const allTags = useMemo(() => {
 		const tagSet = new Set<string>();
@@ -90,19 +72,50 @@ export default function NotesListScreen() {
 	}, [allNotes, filter]);
 
 	const handleRefresh = useCallback(async () => {
-		// push failed changes first
-		await syncManager.retryFailedSyncs();
-		// then pull server changes
-		await syncManager.pullFromServer();
+		setIsRefreshing(true);
 
-		refetch();
-	}, [refetch]);
+		try {
+			await processPendingMutations(convex);
+		} finally {
+			setIsRefreshing(false);
+		}
+	}, [convex]);
 
 	const handleNotePress = useCallback(
 		(noteId: string) => {
 			router.push(`/notes/${noteId}`);
 		},
 		[router],
+	);
+
+	const handleDeleteNote = useCallback(
+		(noteId: string) => {
+			Alert.alert("Delete Note", "Are you sure you want to delete this note?", [
+				{ text: "Cancel", style: "cancel" },
+				{
+					text: "Delete",
+					style: "destructive",
+					onPress: async () => {
+						try {
+							if (isOnline()) {
+								await convex.mutation(api.notes.remove, {
+									id: noteId as NoteId,
+								});
+							} else {
+								await deleteCachedNote(noteId);
+								await addPendingMutation("remove", noteId, { id: noteId });
+							}
+
+							toast.success("Note Deleted");
+						} catch (error) {
+							console.error("delete note error:", error);
+							toast.error("Failed to delete note");
+						}
+					},
+				},
+			]);
+		},
+		[convex],
 	);
 
 	const handleCreateNote = useCallback(() => {
@@ -118,10 +131,14 @@ export default function NotesListScreen() {
 	}, []);
 
 	const renderNote = useCallback(
-		({ item }: { item: Note }) => (
-			<NoteCard note={item} onPress={() => handleNotePress(item.id)} />
+		({ item }: { item: NoteWithSync }) => (
+			<NoteCard
+				note={item}
+				onPress={() => handleNotePress(item._id)}
+				onDelete={() => handleDeleteNote(item._id)}
+			/>
 		),
-		[handleNotePress],
+		[handleNotePress, handleDeleteNote],
 	);
 
 	const renderEmptyList = useCallback(() => {
@@ -148,7 +165,7 @@ export default function NotesListScreen() {
 				onAction={handleCreateNote}
 			/>
 		);
-	}, [filter.search, filter.tag, handleCreateNote]);
+	}, [filter.search, filter.tag, handleCreateNote, isLoading]);
 
 	return (
 		<SafeAreaView style={{ flex: 1 }} edges={["top"]}>
@@ -173,14 +190,14 @@ export default function NotesListScreen() {
 					<FlashList
 						data={filteredNotes}
 						renderItem={renderNote}
-						keyExtractor={(item) => item.id}
+						keyExtractor={(item) => item._id}
 						contentContainerStyle={
 							filteredNotes?.length === 0
 								? { flexGrow: 1 }
 								: { paddingBottom: listBottomPadding }
 						}
 						ListEmptyComponent={renderEmptyList}
-						refreshing={syncStatus === "syncing"}
+						refreshing={isRefreshing}
 						onRefresh={handleRefresh}
 						keyboardDismissMode="on-drag"
 						keyboardShouldPersistTaps="handled"

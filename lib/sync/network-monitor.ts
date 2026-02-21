@@ -59,19 +59,3 @@ export const isOnline = (): boolean => {
 export const setOnConnectivityRestored = (callback: () => void) => {
 	onConnectivityRestored = callback;
 };
-
-// wait for network connection
-export const waitForConnection = async (): Promise<void> => {
-	if (isConnected) {
-		return;
-	}
-
-	return new Promise((resolve) => {
-		const unsubscribe = NetInfo.addEventListener((state) => {
-			if (state.isConnected) {
-				unsubscribe();
-				resolve();
-			}
-		});
-	});
-};

@@ -5,24 +5,22 @@ import * as SplashScreen from "expo-splash-screen";
 import "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { HeroUINativeProvider } from "heroui-native";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { Toaster } from "sonner-native";
 
 import "../global.css";
 
 // lib
 import { runMigrations } from "@/lib/db/migrations";
-import { initializeNetworkMonitor, isOnline } from "@/lib/sync/network-monitor";
-import { syncManager } from "@/lib/sync/sync-manager";
-import * as db from "@/lib/db/queries";
+import {
+	initializeNetworkMonitor,
+	setOnConnectivityRestored,
+} from "@/lib/sync/network-monitor";
+import { processPendingMutations } from "@/lib/sync/offline-sync";
 
-const queryClient = new QueryClient({
-	defaultOptions: {
-		queries: {
-			staleTime: 0,
-			retry: 2,
-		},
-	},
+const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
+  unsavedChangesWarning: false,
+  skipConvexDeploymentUrlCheck: true,
 });
 
 // fonts
@@ -58,42 +56,23 @@ export default function RootLayout() {
 		}
 	}, [loaded]);
 
-	// initialize database and sync on mount
+	// initialize database and network monitoring
 	useEffect(() => {
 		const initializeApp = async () => {
 			try {
-				// run database migrations
 				await runMigrations();
 				console.log("[app] database migrations completed");
 
-				// initialize network monitoring first (before setDatabaseReady)
 				await initializeNetworkMonitor();
 				console.log("[app] network monitoring initialized");
 
-				// mark database as ready for sync operations
-				// this must come after network monitor so isOnline() returns correct value
-				syncManager.setDatabaseReady();
+				// process pending mutations on connectivity restored
+				setOnConnectivityRestored(() => {
+					processPendingMutations(convex);
+				});
 
-				// check if database is empty and attempt initial sync
-				const notes = await db.getAllNotes();
-				console.log(`[app] database loaded (${notes.length} notes)`);
-
-				if (notes.length === 0 && isOnline()) {
-					// first launch while online - attempt initial sync
-					try {
-						await syncManager.pullFromServer(true);
-						console.log("[app] initial sync completed");
-
-						// invalidate notes query so ui refreshes with synced data
-						queryClient.invalidateQueries({ queryKey: ["notes"] });
-					} catch (syncError) {
-						// silent failure - offline-first app should work without server
-						console.log("[app] starting in offline mode - initial sync failed");
-					}
-				} else if (notes.length === 0) {
-					// first launch while offline
-					console.log("[app] starting offline - no network");
-				}
+				// process any pending offline mutations
+				await processPendingMutations(convex);
 			} catch (error) {
 				console.error("[app] failed to initialize:", error);
 			}
@@ -111,7 +90,7 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
 	return (
-		<QueryClientProvider client={queryClient}>
+		<ConvexProvider client={convex}>
 			<GestureHandlerRootView style={{ flex: 1 }}>
 				<HeroUINativeProvider
 					config={{
@@ -128,6 +107,6 @@ function RootLayoutNav() {
 					<Toaster closeButton />
 				</HeroUINativeProvider>
 			</GestureHandlerRootView>
-		</QueryClientProvider>
+		</ConvexProvider>
 	);
 }

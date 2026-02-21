@@ -1,270 +1,202 @@
 import { getDatabase } from "./client";
-import { generateUUID } from "@/lib/utils/uuid";
 import { getCurrentISOTimestamp } from "@/lib/utils/date";
-import type { Note, NoteFormData, SyncStatus } from "@/lib/types/note";
+import type { Note, NoteWithSync, SyncStatus } from "@/lib/types/note";
 
-// internal sqlite row type (snake_case columns)
-interface NoteRow {
-	id: string;
-	title: string;
-	body: string;
-	tags: string;
-	updated_at: string;
-	local_updated_at: string;
-	sync_status: SyncStatus;
-	is_deleted: number;
-	last_sync_error: string | null;
+// internal sqlite row type for notes cache
+interface NotesCacheRow {
+  id: string;
+  title: string;
+  body: string;
+  tags: string;
+  updated_at: number;
+  creation_time: number;
+  is_deleted: number;
+  sync_status: string;
 }
 
-// helper to deserialize sqlite row to note object
-const deserializeNote = (row: NoteRow): Note => {
-	return {
-		id: row.id,
-		title: row.title,
-		body: row.body,
-		tags: JSON.parse(row.tags),
-		updatedAt: row.updated_at,
-		localUpdatedAt: row.local_updated_at,
-		syncStatus: row.sync_status,
-		isDeleted: row.is_deleted === 1,
-		lastSyncError: row.last_sync_error || undefined,
-		createdAt: row.updated_at, // derive from updatedAt
-	};
+// internal row type for pending mutations
+interface PendingMutationRow {
+  id: number;
+  type: string;
+  note_id: string | null;
+  payload: string;
+  created_at: string;
+}
+
+export interface PendingMutation {
+  id: number;
+  type: "create" | "update" | "remove";
+  noteId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+// helper to convert cache row to note object with sync status
+const deserializeCacheRow = (row: NotesCacheRow): NoteWithSync => {
+  return {
+    _id: row.id as Note["_id"],
+    _creationTime: row.creation_time,
+    title: row.title,
+    body: row.body,
+    tags: JSON.parse(row.tags),
+    updatedAt: row.updated_at,
+    isDeleted: row.is_deleted === 1,
+    syncStatus: row.sync_status as SyncStatus,
+  };
 };
 
-// get all non-deleted notes
-export const getAllNotes = async (): Promise<Note[]> => {
-	const db = await getDatabase();
+// bulk upsert notes from convex into cache
+export const cacheNotes = async (notes: Note[]): Promise<void> => {
+  const db = await getDatabase();
 
-	const rows = await db.getAllAsync<NoteRow>(
-		"SELECT * FROM notes WHERE is_deleted = 0 ORDER BY updated_at DESC",
-	);
+  // clear existing cache and insert fresh data
+  await db.execAsync(`DELETE FROM notes_cache;`);
 
-	return rows.map(deserializeNote);
+  for (const note of notes) {
+    await db.runAsync(
+      `INSERT INTO notes_cache (id, title, body, tags, updated_at, creation_time, is_deleted, sync_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        note._id,
+        note.title,
+        note.body,
+        JSON.stringify(note.tags),
+        note.updatedAt,
+        note._creationTime,
+        note.isDeleted ? 1 : 0,
+        "synced",
+      ],
+    );
+  }
 };
 
-// get single note by id
-export const getNoteById = async (id: string): Promise<Note | null> => {
-	const db = await getDatabase();
+// get all cached notes for offline display
+export const getCachedNotes = async (): Promise<NoteWithSync[]> => {
+  const db = await getDatabase();
 
-	const row = await db.getFirstAsync<NoteRow>(
-		"SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
-		[id],
-	);
+  const rows = await db.getAllAsync<NotesCacheRow>(
+    "SELECT * FROM notes_cache WHERE is_deleted = 0 ORDER BY updated_at DESC",
+  );
 
-	return row ? deserializeNote(row) : null;
+  return rows.map(deserializeCacheRow);
 };
 
-// get single note by id including deleted (for sync operations)
-export const getNoteByIdForSync = async (id: string): Promise<Note | null> => {
-	const db = await getDatabase();
+// get a single cached note
+export const getCachedNote = async (id: string): Promise<NoteWithSync | null> => {
+  const db = await getDatabase();
 
-	const row = await db.getFirstAsync<NoteRow>(
-		"SELECT * FROM notes WHERE id = ?",
-		[id],
-	);
+  const row = await db.getFirstAsync<NotesCacheRow>(
+    "SELECT * FROM notes_cache WHERE id = ? AND is_deleted = 0",
+    [id],
+  );
 
-	return row ? deserializeNote(row) : null;
+  return row ? deserializeCacheRow(row) : null;
 };
 
-// insert new note
-export const insertNote = async (input: NoteFormData): Promise<Note> => {
-	const db = await getDatabase();
-
-	const now = getCurrentISOTimestamp();
-	const id = generateUUID();
-
-	await db.runAsync(
-		`INSERT INTO notes (
-      id, title, body, tags, updated_at, local_updated_at, sync_status, is_deleted
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		[
-			id,
-			input.title,
-			input.body,
-			JSON.stringify(input.tags),
-			now,
-			now,
-			"pending",
-			0,
-		],
-	);
-
-	const note = await getNoteById(id);
-
-	console.log("note created:", note);
-
-	if (!note) {
-		throw new Error("failed to create note");
-	}
-
-	return note;
-};
-
-// update existing note
-export const updateNote = async (
-	params: { id: string } & Partial<NoteFormData>,
-): Promise<Note> => {
-	const db = await getDatabase();
-	const { id, ...updates } = params;
-	const now = getCurrentISOTimestamp();
-
-	// build dynamic update query
-	const updateFields: string[] = [];
-	const updateValues: any[] = [];
-
-	if (updates.title !== undefined) {
-		updateFields.push("title = ?");
-		updateValues.push(updates.title);
-	}
-
-	if (updates.body !== undefined) {
-		updateFields.push("body = ?");
-		updateValues.push(updates.body);
-	}
-
-	if (updates.tags !== undefined) {
-		updateFields.push("tags = ?");
-		updateValues.push(JSON.stringify(updates.tags));
-	}
-
-	// always update timestamps and sync status
-	updateFields.push(
-		"updated_at = ?",
-		"local_updated_at = ?",
-		"sync_status = ?",
-	);
-	updateValues.push(now, now, "pending");
-
-	// add id at the end for WHERE clause
-	updateValues.push(id);
-
-	await db.runAsync(
-		`UPDATE notes SET ${updateFields.join(", ")} WHERE id = ?`,
-		updateValues,
-	);
-
-	const note = await getNoteById(id);
-	if (!note) {
-		throw new Error("failed to update note");
-	}
-
-	return note;
-};
-
-// soft delete note (mark as deleted)
-export const softDeleteNote = async (id: string): Promise<void> => {
-	const db = await getDatabase();
-	const now = getCurrentISOTimestamp();
-
-	await db.runAsync(
-		`UPDATE notes SET is_deleted = 1, sync_status = 'pending', local_updated_at = ? WHERE id = ?`,
-		[now, id],
-	);
-};
-
-// hard delete note (permanently remove from db)
-export const hardDeleteNote = async (id: string): Promise<void> => {
-	const db = await getDatabase();
-	await db.runAsync("DELETE FROM notes WHERE id = ?", [id]);
-};
-
-// get all notes pending sync
-export const getPendingNotes = async (): Promise<Note[]> => {
-	const db = await getDatabase();
-
-	const rows = await db.getAllAsync<NoteRow>(
-		"SELECT * FROM notes WHERE sync_status = 'pending' ORDER BY local_updated_at ASC",
-	);
-
-	return rows.map(deserializeNote);
-};
-
-// get all notes that failed to sync
-export const getFailedNotes = async (): Promise<Note[]> => {
-	const db = await getDatabase();
-	const rows = await db.getAllAsync<NoteRow>(
-		"SELECT * FROM notes WHERE sync_status = 'failed' ORDER BY local_updated_at DESC",
-	);
-	return rows.map(deserializeNote);
-};
-
-// update sync status
-export const updateSyncStatus = async (
-	id: string,
-	status: SyncStatus,
-	error?: string,
+// insert a note directly into cache (for offline creates)
+export const insertCachedNote = async (
+  id: string,
+  data: { title: string; body: string; tags: string[] },
 ): Promise<void> => {
-	const db = await getDatabase();
-	await db.runAsync(
-		"UPDATE notes SET sync_status = ?, last_sync_error = ? WHERE id = ?",
-		[status, error || null, id],
-	);
+  const db = await getDatabase();
+  const now = Date.now();
+
+  await db.runAsync(
+    `INSERT OR REPLACE INTO notes_cache (id, title, body, tags, updated_at, creation_time, is_deleted, sync_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, data.title, data.body, JSON.stringify(data.tags), now, now, 0, "pending"],
+  );
 };
 
-// get ids of all synced (non-pending) notes for remote deletion detection
-export const getSyncedNoteIds = async (): Promise<string[]> => {
-	const db = await getDatabase();
+// update a note in cache (for offline edits)
+export const updateCachedNote = async (
+  id: string,
+  data: { title?: string; body?: string; tags?: string[] },
+): Promise<void> => {
+  const db = await getDatabase();
+  const now = Date.now();
 
-	const rows = await db.getAllAsync<{ id: string }>(
-		"SELECT id FROM notes WHERE sync_status = 'synced' AND is_deleted = 0",
-	);
+  const fields: string[] = [];
+  const values: any[] = [];
 
-	return rows.map((row) => row.id);
+  if (data.title !== undefined) {
+    fields.push("title = ?");
+    values.push(data.title);
+  }
+  if (data.body !== undefined) {
+    fields.push("body = ?");
+    values.push(data.body);
+  }
+  if (data.tags !== undefined) {
+    fields.push("tags = ?");
+    values.push(JSON.stringify(data.tags));
+  }
+
+  fields.push("updated_at = ?", "sync_status = ?");
+  values.push(now, "pending");
+  values.push(id);
+
+  await db.runAsync(
+    `UPDATE notes_cache SET ${fields.join(", ")} WHERE id = ?`,
+    values,
+  );
 };
 
-// update note from server (during sync pull)
-export const upsertNoteFromServer = async (serverNote: {
-	id: string;
-	title: string;
-	body: string;
-	tags: string[];
-	updatedAt: string;
-}): Promise<void> => {
-	const db = await getDatabase();
+// soft delete a note in cache (for offline deletes)
+export const deleteCachedNote = async (id: string): Promise<void> => {
+  const db = await getDatabase();
 
-	// check if note exists locally
-	const existing = await db.getFirstAsync<{ id: string }>(
-		"SELECT id FROM notes WHERE id = ?",
-		[serverNote.id],
-	);
+  await db.runAsync(
+    "UPDATE notes_cache SET is_deleted = 1, updated_at = ? WHERE id = ?",
+    [Date.now(), id],
+  );
+};
 
-	if (existing) {
-		// update existing note
-		await db.runAsync(
-			`UPDATE notes SET
-        title = ?,
-        body = ?,
-        tags = ?,
-        updated_at = ?,
-        local_updated_at = ?,
-        sync_status = 'synced',
-        is_deleted = 0,
-        last_sync_error = NULL
-      WHERE id = ?`,
-			[
-				serverNote.title,
-				serverNote.body,
-				JSON.stringify(serverNote.tags),
-				serverNote.updatedAt,
-				serverNote.updatedAt,
-				serverNote.id,
-			],
-		);
-	} else {
-		// insert new note from server
-		await db.runAsync(
-			`INSERT INTO notes (
-        id, title, body, tags, updated_at, local_updated_at, sync_status, is_deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, 'synced', 0)`,
-			[
-				serverNote.id,
-				serverNote.title,
-				serverNote.body,
-				JSON.stringify(serverNote.tags),
-				serverNote.updatedAt,
-				serverNote.updatedAt,
-			],
-		);
-	}
+// queue an offline mutation
+export const addPendingMutation = async (
+  type: "create" | "update" | "remove",
+  noteId: string | null,
+  payload: Record<string, unknown>,
+): Promise<void> => {
+  const db = await getDatabase();
+  const now = getCurrentISOTimestamp();
+
+  await db.runAsync(
+    `INSERT INTO pending_mutations (type, note_id, payload, created_at) VALUES (?, ?, ?, ?)`,
+    [type, noteId, JSON.stringify(payload), now],
+  );
+};
+
+// get all pending mutations
+export const getPendingMutations = async (): Promise<PendingMutation[]> => {
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync<PendingMutationRow>(
+    "SELECT * FROM pending_mutations ORDER BY id ASC",
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    type: row.type as PendingMutation["type"],
+    noteId: row.note_id,
+    payload: JSON.parse(row.payload),
+    createdAt: row.created_at,
+  }));
+};
+
+// remove a pending mutation after it has been synced
+export const removePendingMutation = async (id: number): Promise<void> => {
+  const db = await getDatabase();
+  await db.runAsync("DELETE FROM pending_mutations WHERE id = ?", [id]);
+};
+
+// check if there are any pending mutations
+export const hasPendingMutations = async (): Promise<boolean> => {
+  const db = await getDatabase();
+
+  const row = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM pending_mutations",
+  );
+
+  return (row?.count ?? 0) > 0;
 };

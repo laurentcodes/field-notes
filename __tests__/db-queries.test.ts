@@ -1,22 +1,17 @@
-import type { Note, SyncStatus } from "@/lib/types/note";
-
 // mock expo-sqlite
 const mockRunAsync = jest.fn();
 const mockGetAllAsync = jest.fn();
 const mockGetFirstAsync = jest.fn();
+const mockExecAsync = jest.fn();
 
 jest.mock("expo-sqlite", () => ({
 	openDatabaseAsync: jest.fn().mockResolvedValue({
 		runAsync: mockRunAsync,
 		getAllAsync: mockGetAllAsync,
 		getFirstAsync: mockGetFirstAsync,
+		execAsync: mockExecAsync,
 		closeAsync: jest.fn(),
 	}),
-}));
-
-// mock uuid generation for predictable ids
-jest.mock("@/lib/utils/uuid", () => ({
-	generateUUID: jest.fn().mockReturnValue("test-uuid-123"),
 }));
 
 // mock date utility for predictable timestamps
@@ -31,82 +26,33 @@ describe("Database Queries", () => {
 		jest.clearAllMocks();
 	});
 
-	describe("insertNote", () => {
-		it("should create a note with syncStatus pending", async () => {
-			// mock the subsequent getNoteById call
-			mockGetFirstAsync.mockResolvedValueOnce({
-				id: "test-uuid-123",
-				title: "Test Note",
-				body: "Test body content",
-				tags: '["tag1","tag2"]',
-				updated_at: "2024-01-15T10:00:00.000Z",
-				local_updated_at: "2024-01-15T10:00:00.000Z",
-				sync_status: "pending" as SyncStatus,
-				is_deleted: 0,
-				last_sync_error: null,
-			});
-
-			const result = await db.insertNote({
-				title: "Test Note",
-				body: "Test body content",
-				tags: ["tag1", "tag2"],
-			});
-
-			// verify insert was called with correct params
-			expect(mockRunAsync).toHaveBeenCalledWith(
-				expect.stringContaining("INSERT INTO notes"),
-				[
-					"test-uuid-123",
-					"Test Note",
-					"Test body content",
-					'["tag1","tag2"]',
-					"2024-01-15T10:00:00.000Z",
-					"2024-01-15T10:00:00.000Z",
-					"pending",
-					0,
-				],
-			);
-
-			// verify returned note has pending sync status
-			expect(result.syncStatus).toBe("pending");
-			expect(result.id).toBe("test-uuid-123");
-			expect(result.title).toBe("Test Note");
-			expect(result.tags).toEqual(["tag1", "tag2"]);
-		});
-	});
-
-	describe("getAllNotes", () => {
-		it("should return non-deleted notes sorted by updated_at DESC", async () => {
+	describe("getCachedNotes", () => {
+		it("should return non-deleted cached notes sorted by updated_at DESC", async () => {
 			mockGetAllAsync.mockResolvedValueOnce([
 				{
 					id: "note-1",
 					title: "Newer Note",
 					body: "Body 1",
 					tags: '["work"]',
-					updated_at: "2024-01-15T12:00:00.000Z",
-					local_updated_at: "2024-01-15T12:00:00.000Z",
-					sync_status: "synced" as SyncStatus,
+					updated_at: 1705320000000,
+					creation_time: 1705310000000,
 					is_deleted: 0,
-					last_sync_error: null,
 				},
 				{
 					id: "note-2",
 					title: "Older Note",
 					body: "Body 2",
 					tags: "[]",
-					updated_at: "2024-01-14T10:00:00.000Z",
-					local_updated_at: "2024-01-14T10:00:00.000Z",
-					sync_status: "pending" as SyncStatus,
+					updated_at: 1705230000000,
+					creation_time: 1705220000000,
 					is_deleted: 0,
-					last_sync_error: null,
 				},
 			]);
 
-			const notes = await db.getAllNotes();
+			const notes = await db.getCachedNotes();
 
-			// verify query excludes deleted notes and orders correctly
 			expect(mockGetAllAsync).toHaveBeenCalledWith(
-				"SELECT * FROM notes WHERE is_deleted = 0 ORDER BY updated_at DESC",
+				"SELECT * FROM notes_cache WHERE is_deleted = 0 ORDER BY updated_at DESC",
 			);
 
 			expect(notes).toHaveLength(2);
@@ -117,111 +63,118 @@ describe("Database Queries", () => {
 		it("should return empty array when no notes exist", async () => {
 			mockGetAllAsync.mockResolvedValueOnce([]);
 
-			const notes = await db.getAllNotes();
+			const notes = await db.getCachedNotes();
 
 			expect(notes).toEqual([]);
 		});
 	});
 
-	describe("softDeleteNote", () => {
-		it("should mark note as deleted with pending sync status", async () => {
-			await db.softDeleteNote("note-to-delete");
-
-			expect(mockRunAsync).toHaveBeenCalledWith(
-				expect.stringContaining("is_deleted = 1"),
-				["2024-01-15T10:00:00.000Z", "note-to-delete"],
-			);
-
-			// verify sync_status is set to pending for sync
-			expect(mockRunAsync).toHaveBeenCalledWith(
-				expect.stringContaining("sync_status = 'pending'"),
-				expect.any(Array),
-			);
-		});
-	});
-
-	describe("updateNote", () => {
-		it("should update fields and reset sync status to pending", async () => {
+	describe("getCachedNote", () => {
+		it("should return a single cached note by id", async () => {
 			mockGetFirstAsync.mockResolvedValueOnce({
 				id: "note-1",
-				title: "Updated Title",
-				body: "Updated body",
-				tags: '["updated"]',
-				updated_at: "2024-01-15T10:00:00.000Z",
-				local_updated_at: "2024-01-15T10:00:00.000Z",
-				sync_status: "pending" as SyncStatus,
+				title: "Test Note",
+				body: "Test body",
+				tags: '["tag1"]',
+				updated_at: 1705320000000,
+				creation_time: 1705310000000,
 				is_deleted: 0,
-				last_sync_error: null,
 			});
 
-			const result = await db.updateNote({
-				id: "note-1",
-				title: "Updated Title",
-				body: "Updated body",
-				tags: ["updated"],
-			});
+			const note = await db.getCachedNote("note-1");
 
-			// verify update was called
-			expect(mockRunAsync).toHaveBeenCalledWith(
-				expect.stringContaining("UPDATE notes SET"),
-				expect.arrayContaining([
-					"Updated Title",
-					"Updated body",
-					'["updated"]',
-					"pending",
-				]),
+			expect(mockGetFirstAsync).toHaveBeenCalledWith(
+				"SELECT * FROM notes_cache WHERE id = ? AND is_deleted = 0",
+				["note-1"],
 			);
 
-			// verify returned note has pending status
-			expect(result.syncStatus).toBe("pending");
-			expect(result.title).toBe("Updated Title");
+			expect(note).not.toBeNull();
+			expect(note?.title).toBe("Test Note");
+		});
+
+		it("should return null when note not found", async () => {
+			mockGetFirstAsync.mockResolvedValueOnce(null);
+
+			const note = await db.getCachedNote("nonexistent");
+
+			expect(note).toBeNull();
 		});
 	});
 
-	describe("getPendingNotes", () => {
-		it("should return only notes with pending sync status", async () => {
+	describe("addPendingMutation", () => {
+		it("should insert a pending mutation", async () => {
+			await db.addPendingMutation("create", null, {
+				title: "New Note",
+				body: "Content",
+				tags: ["test"],
+			});
+
+			expect(mockRunAsync).toHaveBeenCalledWith(
+				expect.stringContaining("INSERT INTO pending_mutations"),
+				[
+					"create",
+					null,
+					'{"title":"New Note","body":"Content","tags":["test"]}',
+					"2024-01-15T10:00:00.000Z",
+				],
+			);
+		});
+	});
+
+	describe("getPendingMutations", () => {
+		it("should return all pending mutations ordered by id", async () => {
 			mockGetAllAsync.mockResolvedValueOnce([
 				{
-					id: "pending-note",
-					title: "Pending Note",
-					body: "Body",
-					tags: "[]",
-					updated_at: "2024-01-15T10:00:00.000Z",
-					local_updated_at: "2024-01-15T10:00:00.000Z",
-					sync_status: "pending" as SyncStatus,
-					is_deleted: 0,
-					last_sync_error: null,
+					id: 1,
+					type: "create",
+					note_id: null,
+					payload: '{"title":"Note 1","body":"Body","tags":[]}',
+					created_at: "2024-01-15T10:00:00.000Z",
 				},
 			]);
 
-			const notes = await db.getPendingNotes();
+			const mutations = await db.getPendingMutations();
 
 			expect(mockGetAllAsync).toHaveBeenCalledWith(
-				"SELECT * FROM notes WHERE sync_status = 'pending' ORDER BY local_updated_at ASC",
+				"SELECT * FROM pending_mutations ORDER BY id ASC",
 			);
 
-			expect(notes).toHaveLength(1);
-			expect(notes[0].syncStatus).toBe("pending");
+			expect(mutations).toHaveLength(1);
+			expect(mutations[0].type).toBe("create");
+			expect(mutations[0].payload).toEqual({
+				title: "Note 1",
+				body: "Body",
+				tags: [],
+			});
 		});
 	});
 
-	describe("updateSyncStatus", () => {
-		it("should update sync status and error message", async () => {
-			await db.updateSyncStatus("note-1", "failed", "Network error");
+	describe("removePendingMutation", () => {
+		it("should delete a pending mutation by id", async () => {
+			await db.removePendingMutation(1);
 
 			expect(mockRunAsync).toHaveBeenCalledWith(
-				"UPDATE notes SET sync_status = ?, last_sync_error = ? WHERE id = ?",
-				["failed", "Network error", "note-1"],
+				"DELETE FROM pending_mutations WHERE id = ?",
+				[1],
 			);
 		});
+	});
 
-		it("should clear error message when status is synced", async () => {
-			await db.updateSyncStatus("note-1", "synced");
+	describe("hasPendingMutations", () => {
+		it("should return true when there are pending mutations", async () => {
+			mockGetFirstAsync.mockResolvedValueOnce({ count: 3 });
 
-			expect(mockRunAsync).toHaveBeenCalledWith(
-				"UPDATE notes SET sync_status = ?, last_sync_error = ? WHERE id = ?",
-				["synced", null, "note-1"],
-			);
+			const result = await db.hasPendingMutations();
+
+			expect(result).toBe(true);
+		});
+
+		it("should return false when there are no pending mutations", async () => {
+			mockGetFirstAsync.mockResolvedValueOnce({ count: 0 });
+
+			const result = await db.hasPendingMutations();
+
+			expect(result).toBe(false);
 		});
 	});
 });
