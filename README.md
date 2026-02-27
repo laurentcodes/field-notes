@@ -7,11 +7,11 @@ An offline-first notes application built with React Native and Expo, designed fo
 ## Features
 
 - **Offline-First Architecture** - All data stored locally in SQLite, works without internet
-- **Background Sync** - Automatic synchronization when connectivity is restored
+- **Background Sync** - Automatic synchronization with Convex when connectivity is restored
 - **Optimistic Updates** - Instant UI feedback, no waiting for server responses
-- **Conflict Resolution** - Server-wins strategy with user notifications
+- **Pending Mutation Queue** - Offline writes are queued and replayed when back online
 - **Search & Filter** - Search by title, filter by tags
-- **Manual Retry** - Retry failed syncs with one tap
+- **Manual Retry** - Pull-to-refresh to trigger sync manually
 
 ## Tech Stack
 
@@ -19,10 +19,9 @@ An offline-first notes application built with React Native and Expo, designed fo
 |-------|------------|
 | Framework | Expo SDK 54, React Native 0.81 |
 | Routing | Expo Router 6 (file-based) |
-| UI | HeroUI Native, TailwindCSS 4 (uniwind) |
-| State/Data | TanStack React Query 5 |
+| UI | HeroUI Native, TailwindCSS 4 (Uniwind) |
+| Backend | Convex (self-hosted) |
 | Local Database | expo-sqlite (SQLite) |
-| HTTP Client | Axios |
 | Language | TypeScript (strict mode) |
 
 ## Getting Started
@@ -33,6 +32,7 @@ An offline-first notes application built with React Native and Expo, designed fo
 - npm or yarn
 - iOS Simulator (Mac) or Android Emulator
 - Expo Go app (for physical device testing)
+- A running Convex deployment
 
 ### Installation
 
@@ -48,12 +48,27 @@ npm install
 npm start
 ```
 
+### Environment Variables
+
+Create a `.env` file at the project root:
+
+```
+EXPO_PUBLIC_CONVEX_URL=your_convex_deployment_url
+```
+
 ### Running the App
 
 ```bash
 npm run ios      # run on iOS simulator
 npm run android  # run on Android emulator
 npm run web      # run in browser
+```
+
+### Convex Backend
+
+```bash
+npm run convex:dev     # start convex dev server
+npm run convex:deploy  # deploy convex functions
 ```
 
 ### Running Tests
@@ -75,6 +90,10 @@ app/                    # expo router file-based routes
     ├── [id]/edit.tsx   # edit note
     └── create.tsx      # create note
 
+convex/                 # convex backend
+├── schema.ts           # database schema
+└── notes.ts            # queries and mutations
+
 components/             # reusable components
 ├── notes/              # note-related (NoteCard, NoteForm, etc.)
 ├── ui/                 # generic ui (FAB, EmptyState, etc.)
@@ -87,8 +106,6 @@ lib/
 ├── types/              # typescript type definitions
 ├── schemas/            # zod validation schemas
 └── utils/              # utilities (uuid, date)
-
-services/               # api service layer (axios calls)
 ```
 
 ## Architecture
@@ -96,44 +113,47 @@ services/               # api service layer (axios calls)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      UI LAYER                               │
-│  Screens & Components (no direct API/DB calls)              │
+│  Screens & Components (no direct DB/API calls)              │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   DOMAIN LAYER                              │
-│  React Query Hooks, Sync Manager, Business Logic            │
+│  Convex React Hooks, Offline Sync, Business Logic           │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    DATA LAYER                               │
 │  ┌─────────────────┐              ┌─────────────────┐       │
-│  │   SQLite DB     │◄────sync────►│   REST API      │       │
-│  │  (local first)  │              │   (remote)      │       │
+│  │  SQLite Cache   │◄────sync────►│  Convex Backend │       │
+│  │  (offline-first)│              │  (self-hosted)  │       │
 │  └─────────────────┘              └─────────────────┘       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Offline-First Strategy
 
-SQLite serves as the **single source of truth** for all data:
+SQLite serves as the **local cache and write queue** for all data:
 
-1. **All reads come from local SQLite** - React Query fetches from the local database
-2. **All writes go to SQLite first** - Changes are saved locally with `syncStatus: 'pending'`
+1. **Reads come from local SQLite cache** - UI always reads from the local `notes_cache` table
+2. **Writes go to SQLite first** - Changes are applied locally and queued as pending mutations
 3. **UI never waits for server** - Optimistic updates provide instant feedback
-4. **Sync happens in background** - Pending changes are pushed to the server when online
-5. **Data persists across restarts** - The sync queue survives app closures
+4. **Pending mutations replay on reconnect** - The queue is processed in order when back online
+5. **Data persists across restarts** - The mutation queue survives app closures
 
-### Sync Status
+### Local Database Schema
 
-Each note has a `syncStatus` field:
+Two SQLite tables power the offline experience:
 
-| Status | Meaning |
-|--------|---------|
-| `synced` | Successfully synchronized with server |
-| `pending` | Local changes awaiting sync |
-| `failed` | Sync attempted but failed (retry available) |
+**`notes_cache`** — mirrors Convex notes for offline reads:
+- `id`, `title`, `body`, `tags`, `updated_at`, `creation_time`
+- `is_deleted` (soft delete flag)
+- `sync_status` (`synced` | `pending`)
+
+**`pending_mutations`** — write-ahead queue for offline operations:
+- `type` (`create` | `update` | `remove`)
+- `note_id`, `payload` (serialized mutation arguments)
 
 ## Sync Behavior
 
@@ -141,10 +161,9 @@ Each note has a `syncStatus` field:
 
 Synchronization is triggered when:
 
-1. **App comes to foreground** - Retries any failed syncs
-2. **Network connectivity restored** - Automatically syncs pending changes
+1. **App launches** - Pending mutations are replayed against Convex
+2. **Network connectivity restored** - Automatically flushes the mutation queue
 3. **Pull-to-refresh** - Manual sync from notes list
-4. **After local mutation** - Immediate sync attempt for new/updated notes
 
 ### Sync Flow
 
@@ -153,9 +172,10 @@ Local Change
      │
      ▼
 ┌──────────────┐
-│ Save to      │
-│ SQLite       │
-│ (pending)    │
+│ Write to     │
+│ SQLite cache │
+│ + queue      │
+│ mutation     │
 └──────┬───────┘
        │
        ▼
@@ -166,8 +186,8 @@ Local Change
        │ Yes
        ▼
 ┌──────────────┐
-│ Push to      │
-│ Server       │
+│ Replay queue │
+│ via Convex   │
 └──────┬───────┘
        │
    ┌───┴───┐
@@ -175,25 +195,14 @@ Local Change
 Success   Failure
    │         │
    ▼         ▼
-synced    failed
+remove    stop + retry
+mutation   next launch
+from queue
 ```
 
-### Remote Deletion Detection
+### Mutation Ordering
 
-When pulling from the server, notes that exist locally but not on the server are automatically removed (if they were previously synced).
-
-## Conflict Handling
-
-The app uses a **server-wins (last-write-wins)** conflict resolution strategy:
-
-1. When updating a note, if the server returns a `409 Conflict`:
-   - The server version is accepted as the source of truth
-   - Local note is updated with server data
-   - User is notified via toast: *"Note was updated on another device"*
-
-2. **Rationale**: This approach is simpler to implement and understand. It prioritizes data consistency over preserving local changes.
-
-3. **Trade-off**: Local changes may be lost if edited simultaneously on multiple devices. For most note-taking use cases, this is acceptable.
+Mutations are processed in insertion order (FIFO). If any mutation fails, processing stops to preserve causal consistency. Failed mutations remain in the queue and will be retried on the next sync attempt.
 
 ## Testing
 
@@ -203,32 +212,15 @@ The project includes unit tests for database query operations:
 npm test
 ```
 
-Tests cover:
-- `insertNote()` - Creates notes with `pending` sync status
-- `getAllNotes()` - Returns non-deleted notes sorted by date
-- `softDeleteNote()` - Marks notes for deletion sync
-- `updateNote()` - Updates fields and resets sync status
-- `getPendingNotes()` - Retrieves notes awaiting sync
-- `updateSyncStatus()` - Updates sync state and error messages
-
-## Trade-offs & Future Improvements
-
-### Current Trade-offs
+## Trade-offs & Design Decisions
 
 | Decision | Trade-off |
 |----------|-----------|
-| Server-wins conflict resolution | Simpler implementation, but may lose local changes on simultaneous edits |
-| Full sync on reconnect | Fetches all notes; may be slow with large datasets |
-| Client-side search | Works offline, but limited to loaded data |
-| Soft deletes | Requires sync before permanent deletion |
-
-## API
-
-The app connects to:
-
-- **Base URL**: `https://interviewapi.czettapay.com/v1`
-- **Documentation**: `https://interviewapi.czettapay.com/swagger/index.html`
-- **Authentication**: Not required
+| SQLite cache + mutation queue | Works fully offline, but cache can drift from server if mutations fail repeatedly |
+| FIFO mutation processing | Preserves causal order, but a single failure blocks the queue |
+| Convex real-time queries | Live updates when online, falls back to cache when offline |
+| Client-side search | Works offline, but limited to cached data |
+| Soft deletes | Consistent with Convex schema; hard delete happens server-side |
 
 ## License
 
